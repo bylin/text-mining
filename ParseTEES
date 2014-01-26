@@ -1,0 +1,99 @@
+#!/usr/bin/python2.7
+# Author: Brian Lin
+import logging
+import sys
+import argparse
+import datetime
+import re
+
+def main():
+	args = parseArgs()
+	sentences, sentenceRefs = getSentences(args.raw)
+	entities = getEntities(args.a1, sentences)
+	geneInfo = getGeneInfo(args.geneFile)
+	print 'cause\ttheme\traw relation\trelation\tsentence\tpmid\texpected gene IDs\texpected gene names\texpected raw gene names\texpected relations\tsentence'
+	for cause, theme, rawRelation, relation, sentenceStart in getInteractions(args.a2, entities, sentences):
+		gene = geneInfo[sentenceRefs[sentenceStart]]
+		sentence = sentences[sentenceStart]
+		print '{}\t{}\t{}\t{}\t{}\t{}'.format(cause, theme, rawRelation, relation, sentence, gene)
+		
+def getSentences(raw):
+	sentences = {}
+	sentenceRefs = {}
+	oldStart, i = 0, 0
+	raw = raw.read()
+	for sentence in re.finditer('\n', raw):
+		start = sentence.start()
+		if start - oldStart < 4:
+			continue #malformed sentence
+		sentences[oldStart] = raw[oldStart:start]
+		sentenceRefs[oldStart] = i
+		oldStart = start + 1
+		i += 1
+	return sentences, sentenceRefs
+	
+def getGeneInfo(geneFile):
+	geneFile.readline()
+	geneRefs = []
+	for line in geneFile:
+		geneRefs.append(line.strip())
+	return geneRefs
+
+def getEntities(a1, raw):
+	entities = {}
+	for line in a1:
+		teesId, _, start, end, name = re.split('\W+', line, maxsplit=4)
+		entities[teesId] = name.strip()
+	return entities
+		
+def getInteractions(a2, entities, sentences):
+	interactions = []
+	events = {}
+	relations = {}
+	for line in a2:
+		line = line.strip()
+		if line[0] == 'T': # relation line
+			teesId, relation, start, _, name = re.split('\W+', line, maxsplit=4)
+			for sentenceStartPosition in sorted(sentences):
+				if int(start) > sentenceStartPosition:
+					relations[teesId] = (name, sentenceStartPosition)
+		elif line[0] == 'E': # event line
+			#print line, 1 if "Cause:" in line else 0, 1 if "Theme:" in line else 0
+			if 'ToLoc:' in line or 'AtLoc:' in line or 'Site' in line or 'Theme3:' in line: continue
+			if ("Cause:" in line and "Theme:" in line) or "Theme2:" in line:
+				eventId, relation, relationId, _, causeId, _, themeId = re.split('\W+', line)
+				try:
+					while themeId[0] == 'E':
+						themeId = events[themeId]
+					while causeId[0] == 'E':
+						causeId = events[causeId]
+				except KeyError:	
+					continue # TEES is referencing an event as an entity
+			#	print line
+				rawRelation = relations[relationId][0]
+				sentenceStart = relations[relationId][1]
+			#	print entities[causeId]
+			#	print relation
+			#	print sentences[sentenceStart]
+			#	print entities[themeId]
+				yield entities[causeId], entities[themeId], rawRelation, relation, sentenceStart
+			else:
+				eventId, _, _, _, themeId = re.split('\W+', line)
+				events[eventId] = themeId
+				
+
+def parseArgs():
+	parser = argparse.ArgumentParser()
+	parser.add_argument('-v', '--verbose', action='store_true', help='Display verbose output, logging level set to INFO.')
+	parser.add_argument('-a1', type=argparse.FileType('r'), help='TEES .a1 output')
+	parser.add_argument('-a2', type=argparse.FileType('r'), help='TEES .a2 output')
+	parser.add_argument('-r', '--raw', type=argparse.FileType('r'), help='Raw sentence file, TEES input')
+	parser.add_argument('-g', '--geneFile', type=argparse.FileType('r'), help='Raw gene file')
+	args = parser.parse_args()
+	if args.verbose:
+		logging.basicConfig(level=logging.INFO)
+	args.timestamp = 'run-'+datetime.datetime.today().strftime("%a-%b-%d-%Y-%H%M%S")
+	return args
+
+if __name__ == '__main__':
+	main()
